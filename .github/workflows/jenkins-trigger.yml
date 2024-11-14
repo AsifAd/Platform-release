@@ -1,37 +1,196 @@
-{
-  "jobs": [
-    {
-      "id": 1,
-      "job_name": "SampleJob1",
-      "wait_time": 5,
-      "completion_wait": 10,
-      "parameter_sets": [
-        {
-          "param1": "value1"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "job_name": "SampleJob2",
-      "wait_time": 5,
-      "completion_wait": 10,
-      "parameter_sets": [
-        {
-          "param1": "value2"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "job_name": "SampleJob3",
-      "wait_time": 5,
-      "completion_wait": 10,
-      "parameter_sets": [
-        {
-          "param1": "value3"
-        }
-      ]
-    }
-  ]
-}
+name: Matrix Jenkins Job Trigger
+on:
+  workflow_dispatch:
+    inputs:
+      jobs-to-run:
+        description: 'Select jobs to run (comma-separated job IDs)'
+        required: false
+        default: 'all'
+      debug-mode:
+        description: 'Enable debug output'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  JENKINS_URL: "https://262d-103-215-237-160.ngrok-free.app"
+  JENKINS_USER: ${{ secrets.JENKINS_USER }}
+  JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+
+
+jobs:
+  validate-json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Validate jenkins-jobs.json
+        id: validate
+        run: |
+          if [ ! -f .github/jenkins-jobs.json ]; then
+            echo "::error::jenkins-jobs.json file not found!"
+            exit 1
+          fi
+          
+          echo "Validating JSON structure..."
+          required_fields='.jobs[] | select(
+            (.id | type != "number") or
+            (.job_name | type != "string") or
+            (.wait_time | type != "number") or
+            (.completion_wait | type != "number") or
+            (.parameter_sets | type != "array")
+          )'
+          
+          INVALID_JOBS=$(jq -r "$required_fields" .github/jenkins-jobs.json)
+          if [ ! -z "$INVALID_JOBS" ]; then
+            echo "::error::Invalid job configuration found:"
+            echo "$INVALID_JOBS" | jq '.'
+            exit 1
+          fi
+
+  prepare-matrix:
+    needs: validate-json
+    runs-on: ubuntu-latest
+    outputs:
+      job-matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          JOBS_TO_RUN="${{ github.event.inputs.jobs-to-run }}"
+          
+          if [ "$JOBS_TO_RUN" = "" ] || [ "$JOBS_TO_RUN" = "all" ]; then
+            MATRIX=$(jq -c '{"include":.jobs}' .github/jenkins-jobs.json)
+          else
+            MATRIX=$(jq -c --arg jobs "$JOBS_TO_RUN" '
+              {"include": (.jobs | map(select(.id | tostring | 
+                IN($jobs | split(",")[]))))}' .github/jenkins-jobs.json)
+          fi
+          
+          if [ "$(echo "$MATRIX" | jq '.include | length')" -eq 0 ]; then
+            echo "::error::No matching jobs found for IDs: $JOBS_TO_RUN"
+            exit 1
+          fi
+          
+          if [ "${{ inputs.debug-mode }}" = "true" ]; then
+            echo "Selected jobs:"
+            echo "$MATRIX" | jq '.'
+          fi
+          
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  trigger-jenkins:
+    needs: prepare-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.job-matrix) }}
+      fail-fast: false
+      max-parallel: 1
+    
+    steps:
+      - name: Debug job context
+        if: inputs.debug-mode == 'true'
+        run: |
+          echo "Job Details:"
+          echo "============"
+          echo "Job ID: ${{ matrix.id }}"
+          echo "Job Name: ${{ matrix.job_name }}"
+          echo "Wait Time: ${{ matrix.wait_time }}s"
+          echo "Completion Wait: ${{ matrix.completion_wait }}s"
+          echo "Parameters:"
+          echo '${{ toJSON(matrix.parameter_sets) }}' | jq '.'
+      
+      - name: Verify Jenkins connectivity
+        run: |
+          echo "Verifying Jenkins connectivity..."
+          CURL_CMD="curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            --user '${JENKINS_USER}:${JENKINS_TOKEN}' ${JENKINS_URL}"
+          
+          HTTP_CODE=$(eval $CURL_CMD)
+          if [[ $HTTP_CODE != "200" && $HTTP_CODE != "403" ]]; then
+            echo "::error::Cannot connect to Jenkins server (HTTP $HTTP_CODE)"
+            echo "Testing DNS resolution..."
+            host $(echo $JENKINS_URL | sed 's|https://||' | sed 's|/||g')
+            exit 1
+          fi
+      
+      - name: Trigger Jenkins Job
+        run: |
+          # Store parameter sets in a temporary file
+          echo '${{ toJSON(matrix.parameter_sets) }}' > params.json
+          
+          while IFS= read -r params; do
+            if [ "${{ inputs.debug-mode }}" = "true" ]; then
+              echo "Processing parameter set:"
+              echo "$params" | jq '.'
+            fi
+            
+            # Convert parameters to URL-encoded query string
+            PARAMS=$(echo "$params" | jq -r 'to_entries | map("\(.key)=\(.value|@uri)") | join("&")') || {
+              echo "::error::Failed to process parameters:"
+              echo "$params" | jq '.'
+              exit 1
+            }
+            
+            JENKINS_JOB_URL="${JENKINS_URL}/job/${{ matrix.job_name }}/buildWithParameters?${PARAMS}"
+            
+            if [ "${{ inputs.debug-mode }}" = "true" ]; then
+              echo "URL-encoded parameters: $PARAMS"
+              echo "Full Jenkins URL: $JENKINS_JOB_URL"
+            fi
+            
+            MAX_RETRIES=3
+            RETRY_COUNT=0
+            SUCCESS=false
+            
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SUCCESS" != "true" ]; do
+              echo "Triggering Jenkins job '${{ matrix.job_name }}' (attempt $((RETRY_COUNT + 1))/${MAX_RETRIES})..."
+              
+              # Use -v for verbose output in debug mode
+              CURL_OPTS="-s -w \n%{http_code}"
+              if [ "${{ inputs.debug-mode }}" = "true" ]; then
+                CURL_OPTS="$CURL_OPTS -v"
+              fi
+              
+              RESPONSE=$(curl $CURL_OPTS \
+                --connect-timeout 10 \
+                --max-time 30 \
+                --retry 3 \
+                --retry-delay 5 \
+                --retry-max-time 60 \
+                --user "${JENKINS_USER}:${JENKINS_TOKEN}" \
+                "$JENKINS_JOB_URL")
+              
+              HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+              RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
+              
+              if [[ $HTTP_CODE == "201" ]]; then
+                echo "Successfully triggered Jenkins job '${{ matrix.job_name }}'"
+                SUCCESS=true
+              else
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                  echo "Failed to trigger job (HTTP $HTTP_CODE) - Retrying in 30s..."
+                  echo "Response body: $RESPONSE_BODY"
+                  sleep 30
+                else
+                  echo "::error::Failed to trigger job after $MAX_RETRIES attempts"
+                  echo "Last response (HTTP $HTTP_CODE): $RESPONSE_BODY"
+                  echo "Testing Jenkins connectivity..."
+                  curl -v --user "${JENKINS_USER}:${JENKINS_TOKEN}" "${JENKINS_URL}"
+                  exit 1
+                fi
+              fi
+            done
+
+            echo "Waiting ${{ matrix.wait_time }}s before next action..."
+            sleep ${{ matrix.wait_time }}
+          done < <(jq -c '.[]' params.json)
+
+      - name: Wait for job completion
+        if: success()
+        run: |
+          echo "Waiting ${{ matrix.completion_wait }}s for job completion..."
+          sleep ${{ matrix.completion_wait }}
