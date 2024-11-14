@@ -1,0 +1,32 @@
+{
+    "jobs": [
+      {
+        "id": 1,
+        "job_name": "sample-job-1",
+        "wait_time": 5,
+        "completion_wait": 10,
+        "parameter_sets": [
+          {"param1": "value1"}
+        ]
+      },
+      {
+        "id": 2,
+        "job_name": "sample-job-2",
+        "wait_time": 5,
+        "completion_wait": 10,
+        "parameter_sets": [
+          {"param2": "value2"}
+        ]
+      },
+      {
+        "id": 3,
+        "job_name": "sample-job-3",
+        "wait_time": 5,
+        "completion_wait": 10,
+        "parameter_sets": [
+          {"param3": "value3"}
+        ]
+      }
+    ]
+  }
+  
