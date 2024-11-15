@@ -15,7 +15,7 @@ jobs:
       - name: Read JSON file
         id: read_json
         run: |
-          echo "PARAMS=$(cat .github/params/params.json)" >> $GITHUB_ENV
+          echo "PARAMS=$(jq -c . .github/params/params.json)" >> $GITHUB_ENV
 
       - name: Trigger Jenkins Jobs
         run: |
@@ -24,5 +24,5 @@ jobs:
             echo "Triggering Jenkins job: $job with parameter: $param"
             curl -X POST "https://b238-103-215-237-138.ngrok-free.app/job/$job/buildWithParameters" \
               --user "${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_TOKEN }}" \
-              --data-urlencode "stringParam=$(echo $param | jq -r '.param1')"  # Adjust based on your JSON structure
+              --data-urlencode "stringParam=$(echo $param | jq -r '.param1 // .param2 // .param3')"
           done
