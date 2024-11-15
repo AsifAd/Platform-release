@@ -1,0 +1,28 @@
+name: Trigger Jenkins Jobs with String Parameter
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  trigger-jenkins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Read JSON file
+        id: read_json
+        run: |
+          echo "PARAMS=$(cat path/to/your/params.json)" >> $GITHUB_ENV
+
+      - name: Trigger Jenkins Jobs
+        run: |
+          for job in sample-job-1 sample-job-2 sample-job-3; do
+            param=$(echo $PARAMS | jq -c ".[$job]")
+            echo "Triggering Jenkins job: $job with parameter: $param"
+            curl -X POST "https://b238-103-215-237-138.ngrok-free.app/job/$job/buildWithParameters" \
+              --user "${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_TOKEN }}" \
+              --data-urlencode "stringParam=$(echo $param | jq -r '.stringParam')"
+          done

@@ -1,0 +1,11 @@
+{
+    "sample-job-1": {
+        "param1": "value1"
+    },
+    "sample-job-2": {
+        "param2": "value2"
+    },
+    "sample-job-3": {
+        "param3": "value3"
+    }
+}
