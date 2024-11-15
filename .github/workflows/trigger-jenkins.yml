@@ -19,10 +19,15 @@ jobs:
 
       - name: Trigger Jenkins Jobs
         run: |
-          for job in sample-job-1 sample-job-2 sample-job-3; do
-            param=$(echo $PARAMS | jq -c ".[$job]")
+          for job in $(echo $PARAMS | jq -r 'keys[]'); do
+            param=$(echo $PARAMS | jq -c ".\"$job\"")
             echo "Triggering Jenkins job: $job with parameter: $param"
+            
+            # Extract the specific parameter dynamically
+            stringParam=$(echo $param | jq -r 'to_entries | map("\(.key)=\(.value)") | .[]')
+            
+            # Trigger the Jenkins job
             curl -X POST "https://b238-103-215-237-138.ngrok-free.app/job/$job/buildWithParameters" \
               --user "${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_TOKEN }}" \
-              --data-urlencode "stringParam=$(echo $param | jq -r '.param1 // .param2 // .param3')"
+              --data-urlencode "$stringParam"
           done
