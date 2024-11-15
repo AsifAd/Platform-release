@@ -26,3 +26,4 @@ jobs:
               --user "${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_TOKEN }}" \
               --data-urlencode "stringParam=$(echo $param | jq -r '.stringParam')"
           done
+
