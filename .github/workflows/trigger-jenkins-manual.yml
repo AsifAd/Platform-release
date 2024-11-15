@@ -1,0 +1,42 @@
+name: Trigger Jenkins Jobs with Job ID
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID to trigger'
+        required: true
+        default: '1'
+
+jobs:
+  trigger-jenkins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Read JSON file
+        id: read_json
+        run: |
+          echo "PARAMS=$(jq -c . .github/params/jobs.json)" >> $GITHUB_ENV
+
+      - name: Trigger Jenkins Job
+        run: |
+          job_id=${{ github.event.inputs.job_id }}  # Get the job ID from the input
+          param=$(echo $PARAMS | jq -c ".\"$job_id\"")
+          
+          if [ -z "$param" ]; then
+            echo "Job ID '$job_id' not found in jobs.json"
+            exit 1
+          fi
+
+          job_name=$(echo $param | jq -r '.job_name')
+          echo "Triggering Jenkins job: $job_name with parameters: $param"
+          
+          # Extract the specific parameter dynamically
+          stringParam=$(echo $param | jq -r 'to_entries | map("\(.key)=\(.value)") | .[]')
+          
+          # Trigger the Jenkins job
+          curl -X POST "https://b238-103-215-237-138.ngrok-free.app/job/$job_name/buildWithParameters" \
+            --user "${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_TOKEN }}" \
+            --data-urlencode "$stringParam"
