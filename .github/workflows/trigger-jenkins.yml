@@ -27,7 +27,7 @@ jobs:
             stringParam=$(echo $param | jq -r 'to_entries | map("\(.key)=\(.value)") | .[]')
             
             # Trigger the Jenkins job
-            curl -X POST "https://b238-103-215-237-138.ngrok-free.app/job/$job/buildWithParameters" \
+            curl -X POST "https://36e0-103-215-237-153.ngrok-free.app/$job/buildWithParameters" \
               --user "${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_TOKEN }}" \
               --data-urlencode "$stringParam"
           done
